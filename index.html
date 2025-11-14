@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>학생 자리 배치 앱</title>
+    <!-- Tailwind CSS 로드 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PDF 생성 라이브러리 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <style>
+        /* Inter 폰트 사용 (Tailwind 기본) */
+        body {
+            font-family: "Inter", sans-serif;
+        }
+        /* 커스텀 스타일 */
+        .seat {
+            transition: all 0.2s ease-in-out;
+        }
+        .seat:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .seat.pinned {
+            background-color: #dbeafe; /* bg-blue-100 */
+            border-color: #60a5fa; /* border-blue-400 */
+            font-weight: bold;
+        }
+
+        /* 선생님용 보기 (상하 반전) 스타일 */
+        #seatingChartArea.teachers-view {
+            transform: rotate(180deg);
+        }
+        #seatingChartArea.teachers-view .seat,
+        #seatingChartArea.teachers-view .blackboard {
+            transform: rotate(180deg);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-4 md:p-8 flex items-center justify-center min-h-screen">
+
+    <div class="bg-white shadow-xl rounded-2xl w-full max-w-6xl p-6 md:p-8">
+        <h1 class="text-3xl font-bold text-green-800 mb-6 text-center">우리반 자리 배치</h1>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <!-- 1. 제어판 (입력) -->
+            <div class="lg:col-span-1 p-6 bg-gray-50 rounded-lg shadow-inner">
+                <h2 class="text-2xl font-semibold mb-4 text-gray-700">설정</h2>
+                
+                <!-- 교실 크기 -->
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-600 mb-2">교실 크기 (행 x 열)</label>
+                    <div class="flex gap-4">
+                        <input type="number" id="rowsInput" value="5" min="1" max="20" class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500" placeholder="행 (Rows)">
+                        <input type="number" id="colsInput" value="6" min="1" max="20" class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500" placeholder="열 (Cols)">
+                    </div>
+                </div>
+
+                <!-- 학생 명단 -->
+                <div class="mb-4">
+                    <label for="studentList" class="block text-sm font-medium text-gray-600 mb-2">학생 명단</label>
+                    <textarea id="studentList" rows="10" class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500" placeholder="한 줄에 한 명씩 입력하세요.&#10;엑셀에서 복사/붙여넣기 가능합니다.&#10;---&#10;김철수&#10;이영희&#10;박지성"></textarea>
+                </div>
+
+                <!-- 보기 전환 -->
+                <div class="flex items-center justify-between bg-blue-50 p-3 rounded-md border border-blue-200 mb-4">
+                    <label for="teacherViewToggle" class="font-medium text-blue-800">선생님용 보기 (상하반전)</label>
+                    <input type="checkbox" id="teacherViewToggle" class="h-5 w-5 text-blue-600 rounded focus:ring-blue-500 border-gray-300">
+                </div>
+
+                <!-- 버튼 -->
+                <div class="flex flex-col gap-3">
+                    <button id="generateGridBtn" class="w-full bg-blue-600 text-white py-2 px-4 rounded-md font-semibold hover:bg-blue-700 transition duration-200 shadow">
+                        1. 교실 배치 생성
+                    </button>
+                    <button id="arrangeSeatsBtn" class="w-full bg-green-600 text-white py-2 px-4 rounded-md font-semibold hover:bg-green-700 transition duration-200 shadow">
+                        2. 랜덤 자리 배치
+                    </button>
+                    <button id="downloadPdfBtn" class="w-full bg-purple-600 text-white py-2 px-4 rounded-md font-semibold hover:bg-purple-700 transition duration-200 shadow">
+                        3. PDF로 다운로드
+                    </button>
+                    <button id="resetBtn" class="w-full bg-gray-500 text-white py-2 px-4 rounded-md font-semibold hover:bg-gray-600 transition duration-200 shadow mt-2">
+                        초기화
+                    </button>
+                </div>
+            </div>
+
+            <!-- 2. 자리 배치도 (출력) -->
+            <div class="lg:col-span-2">
+                <div class="bg-white p-6 rounded-lg shadow-inner min-h-[400px]">
+                    <h2 class="text-2xl font-semibold mb-6 text-gray-700 text-center">자리 배치도</h2>
+                    
+                    <!-- PDF로 캡처할 영역 -->
+                    <div id="seatingChartArea">
+                        <!-- 교탁 -->
+                        <div class="blackboard w-2/3 mx-auto bg-gray-700 text-white text-center py-2 rounded-t-lg font-medium shadow-md">
+                            교 탁
+                        </div>
+                        
+                        <!-- 자리 그리드 -->
+                        <div id="seatGrid" class="mt-8 grid gap-3 p-2">
+                            <!-- JS로 좌석이 생성될 공간 -->
+                            <p class="text-gray-500 text-center col-span-full">
+                                먼저 왼쪽 설정에서 '교실 배치 생성' 버튼을 눌러주세요.
+                                <br>
+                                자리를 클릭하면 학생을 미리 고정할 수 있습니다.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 학생 고정 모달 (위치 수정 및 버튼 추가) -->
+    <div id="pinModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm">
+            <h3 class="text-lg font-bold mb-4">학생 고정하기</h3>
+            <p class="mb-2 text-sm">자리 <span id="pinSeatLabel" class="font-semibold text-blue-600"></span>에 고정할 학생을 선택하세요.</p>
+            
+            <input type="hidden" id="pinSeatIdInput">
+            
+            <select id="pinStudentSelect" class="w-full p-2 border border-gray-300 rounded-md mb-4">
+                <!-- JS로 학생 목록이 채워질 공간 -->
+            </select>
+            
+            <div class="flex justify-end gap-3">
+                <button id="pinCancelBtn" class="bg-gray-300 text-gray-800 py-2 px-4 rounded-md hover:bg-gray-400 transition">
+                    취소
+                </button>
+                <button id="pinRemoveBtn" class="bg-red-500 text-white py-2 px-4 rounded-md hover:bg-red-600 transition">
+                    고정 해제
+                </button>
+                <!-- *** 누락되었던 버튼 *** -->
+                <button id="pinConfirmBtn" class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition">
+                    고정
+                </button>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        // PDF 라이브러리 전역 참조 (UMD 모듈 로드)
+        const { jsPDF } = window.jspdf;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // DOM 요소
+            const rowsInput = document.getElementById('rowsInput');
+            const colsInput = document.getElementById('colsInput');
+            const studentList = document.getElementById('studentList');
+            const generateGridBtn = document.getElementById('generateGridBtn');
+            const arrangeSeatsBtn = document.getElementById('arrangeSeatsBtn');
+            const resetBtn = document.getElementById('resetBtn');
+            const seatGrid = document.getElementById('seatGrid');
+            const teacherViewToggle = document.getElementById('teacherViewToggle');
+            const downloadPdfBtn = document.getElementById('downloadPdfBtn');
+            const seatingChartArea = document.getElementById('seatingChartArea');
+
+            // 모달 요소
+            const pinModal = document.getElementById('pinModal');
+            const pinSeatLabel = document.getElementById('pinSeatLabel');
+            const pinSeatIdInput = document.getElementById('pinSeatIdInput');
+            const pinStudentSelect = document.getElementById('pinStudentSelect');
+            const pinConfirmBtn = document.getElementById('pinConfirmBtn');
+            const pinCancelBtn = document.getElementById('pinCancelBtn');
+            const pinRemoveBtn = document.getElementById('pinRemoveBtn');
+
+            // 앱 상태
+            let students = [];
+            let pinnedSeats = {}; // { "seat-0-0": "김철수", "seat-0-1": "이영희" }
+
+            // 이벤트 리스너
+            generateGridBtn.addEventListener('click', createDeskGrid);
+            arrangeSeatsBtn.addEventListener('click', assignSeats);
+            resetBtn.addEventListener('click', resetAll);
+            seatGrid.addEventListener('click', handleSeatClick);
+            teacherViewToggle.addEventListener('change', toggleTeacherView);
+            downloadPdfBtn.addEventListener('click', downloadAsPdf);
+            
+            // 모달 버튼 이벤트
+            pinConfirmBtn.addEventListener('click', handlePinConfirm);
+            pinRemoveBtn.addEventListener('click', handlePinRemove);
+            pinCancelBtn.addEventListener('click', () => pinModal.classList.add('hidden'));
+
+            /**
+             * 학생 명단 텍스트를 파싱하여 배열로 변환
+             */
+            function parseStudentList() {
+                const text = studentList.value.trim();
+                students = text.split('\n')
+                               .map(name => name.trim())
+                               .filter(name => name.length > 0);
+            }
+
+            /**
+             * 입력받은 행/열에 맞춰 책상 그리드를 생성
+             */
+            function createDeskGrid() {
+                const rows = parseInt(rowsInput.value);
+                const cols = parseInt(colsInput.value);
+
+                if (isNaN(rows) || isNaN(cols) || rows <= 0 || cols <= 0) {
+                    // alert() 대신 커스텀 UI/메시지 사용 고려 (여기서는 일단 유지)
+                    // 단, alert()는 iframe 환경에서 문제를 일으킬 수 있으므로
+                    // console.warn로 대체하거나 간단한 메시지 박스를 UI에 추가하는 것이 좋습니다.
+                    console.warn('유효한 행과 열의 수를 입력하세요.');
+                    // 간단한 메시지 표시
+                    seatGrid.innerHTML = '<p class="text-red-500 text-center col-span-full">유효한 행과 열의 수를 입력하세요.</p>';
+                    return;
+                }
+
+                // 초기화
+                seatGrid.innerHTML = '';
+                pinnedSeats = {};
+                
+                seatGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+
+                for (let i = 0; i < rows; i++) {
+                    for (let j = 0; j < cols; j++) {
+                        const seatId = `seat-${i}-${j}`;
+                        const seat = document.createElement('div');
+                        seat.className = "seat border-2 border-gray-300 rounded-lg p-3 min-h-[80px] flex flex-col justify-center items-center bg-gray-50 cursor-pointer"; // justify-between -> justify-center
+                        seat.id = seatId;
+                        seat.dataset.row = i;
+                        seat.dataset.col = j;
+                        
+                        // 2. 학생 이름
+                        const studentNameEl = document.createElement('span');
+                        studentNameEl.className = "student-name font-bold text-lg text-gray-800";
+                        studentNameEl.textContent = "---";
+
+                        // 3. 고정 아이콘 (숨겨진 상태)
+                        const pinIconEl = document.createElement('span');
+                        pinIconEl.className = "pin-icon text-sm hidden";
+                        pinIconEl.textContent = "📌";
+
+                        seat.appendChild(studentNameEl);
+                        seat.appendChild(pinIconEl);
+                        seatGrid.appendChild(seat);
+                    }
+                }
+            }
+
+            /**
+             * 좌석 클릭 시 고정 모달 표시
+             */
+            function handleSeatClick(e) {
+                const seat = e.target.closest('.seat');
+                if (!seat) return;
+
+                const seatId = seat.id;
+                // 데이터 속성에서 행/열 정보를 가져와 모달용 라벨 생성
+                const row = parseInt(seat.dataset.row) + 1;
+                const col = parseInt(seat.dataset.col) + 1;
+                const seatLabel = `${row}행 ${col}열`;
+
+                // 1. 학생 목록 파싱
+                parseStudentList();
+                if (students.length === 0) {
+                    // alert('먼저 학생 명단을 입력해주세요.');
+                    console.warn('먼저 학생 명단을 입력해주세요.');
+                    // 임시로 간단한 알림 처리
+                    seat.classList.add('border-red-500');
+                    setTimeout(() => seat.classList.remove('border-red-500'), 1000);
+                    return;
+                }
+
+                // 2. 모달에 정보 설정
+                pinSeatIdInput.value = seatId;
+                pinSeatLabel.textContent = seatLabel;
+
+                // 3. 학생 선택 드롭다운 채우기
+                pinStudentSelect.innerHTML = '<option value="">-- 학생 선택 --</option>';
+                students.forEach(student => {
+                    const option = document.createElement('option');
+                    option.value = student;
+                    option.textContent = student;
+                    
+                    // 현재 이 자리에 고정된 학생이 있다면 그 학생을 기본 선택
+                    if (pinnedSeats[seatId] === student) {
+                        option.selected = true;
+                    }
+                    pinStudentSelect.appendChild(option);
+                });
+
+                // 4. 모달 표시
+                pinModal.classList.remove('hidden');
+            }
+
+            /**
+             * 학생 고정 처리
+             */
+            function handlePinConfirm() {
+                const seatId = pinSeatIdInput.value;
+                const studentName = pinStudentSelect.value;
+                const seatElement = document.getElementById(seatId);
+
+                if (!seatElement) return;
+                
+                // 학생을 선택하지 않은 경우 (고정 해제와 동일하게 처리)
+                if (!studentName) {
+                    handlePinRemove();
+                    return;
+                }
+
+                // 1. 이 학생이 다른 자리에 이미 고정되어 있는지 확인
+                const oldSeatId = Object.keys(pinnedSeats).find(id => pinnedSeats[id] === studentName);
+                if (oldSeatId && oldSeatId !== seatId) {
+                    // 이전 자리에서 고정 해제
+                    const oldSeatElement = document.getElementById(oldSeatId);
+                    if (oldSeatElement) {
+                        clearSeatUI(oldSeatElement);
+                    }
+                    delete pinnedSeats[oldSeatId];
+                }
+
+                // 2. 이 자리에 다른 학생이 이미 고정되어 있었다면, 그 학생 정보는 자동 삭제됨
+                
+                // 3. 새 자리-학생 고정
+                pinnedSeats[seatId] = studentName;
+                updateSeatUI(seatElement, studentName, true); // 고정 UI 업데이트
+
+                pinModal.classList.add('hidden');
+            }
+
+            /**
+             * 특정 좌석의 고정 해제
+             */
+            function handlePinRemove() {
+                const seatId = pinSeatIdInput.value;
+                const seatElement = document.getElementById(seatId);
+
+                if (seatElement && pinnedSeats[seatId]) {
+                    delete pinnedSeats[seatId];
+                    clearSeatUI(seatElement);
+                }
+                pinModal.classList.add('hidden');
+            }
+
+            /**
+             * 좌석 UI를 고정 상태로 업데이트
+             */
+            function updateSeatUI(seatElement, studentName, isPinned) {
+                if (!seatElement) return;
+                
+                seatElement.querySelector('.student-name').textContent = studentName;
+                const pinIcon = seatElement.querySelector('.pin-icon');
+
+                if (isPinned) {
+                    seatElement.classList.add('pinned');
+                    pinIcon.classList.remove('hidden');
+                } else {
+                    seatElement.classList.remove('pinned');
+                    pinIcon.classList.add('hidden');
+                }
+            }
+
+            /**
+             * 좌석 UI를 기본 상태로 초기화
+             */
+            function clearSeatUI(seatElement) {
+                if (!seatElement) return;
+                seatElement.querySelector('.student-name').textContent = "---";
+                seatElement.classList.remove('pinned');
+                seatElement.querySelector('.pin-icon').classList.add('hidden');
+            }
+
+
+            /**
+             * 학생들을 빈 자리에 랜덤 배치
+             */
+            function assignSeats() {
+                parseStudentList();
+                
+                const allSeatElements = document.querySelectorAll('.seat');
+                if (allSeatElements.length === 0) {
+                    // alert('먼저 "교실 배치 생성"을 눌러주세요.');
+                    console.warn('먼저 "교실 배치 생성"을 눌러주세요.');
+                    return;
+                }
+
+                if (students.length === 0) {
+                    // alert('먼저 "학생 명단"을 입력해주세요.');
+                    console.warn('먼저 "학생 명단"을 입력해주세요.');
+                    return;
+                }
+
+                // 1. 고정되지 않은 학생 목록
+                const pinnedStudentNames = Object.values(pinnedSeats);
+                const unpinnedStudents = students.filter(s => !pinnedStudentNames.includes(s));
+
+                // 2. 고정되지 않은 좌석 목록
+                const availableSeats = [];
+                allSeatElements.forEach(seat => {
+                    if (!pinnedSeats[seat.id]) {
+                        availableSeats.push(seat);
+                        // 랜덤 배치 전, 이전에 배치됐던 이름 초기화
+                        clearSeatUI(seat);
+                    }
+                });
+                
+                // 3. 학생 목록 셔플 (Fisher-Yates Shuffle)
+                const shuffledStudents = [...unpinnedStudents];
+                for (let i = shuffledStudents.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [shuffledStudents[i], shuffledStudents[j]] = [shuffledStudents[j], shuffledStudents[i]];
+                }
+
+                // 4. 좌석에 학생 배치
+                availableSeats.forEach((seat, index) => {
+                    const studentName = shuffledStudents[index];
+                    if (studentName) {
+                        updateSeatUI(seat, studentName, false); // 고정 아님 UI
+                    } else {
+                        // 학생 수보다 자리가 많으면 빈 자리로 둠
+                        clearSeatUI(seat);
+                    }
+                });
+
+                // 5. 경고 메시지
+                if (shuffledStudents.length > availableSeats.length) {
+                    // alert('자리가 부족하여 일부 학생이 배치되지 못했습니다.');
+                    console.warn('자리가 부족하여 일부 학생이 배치되지 못했습니다.');
+                }
+            }
+
+            /**
+             * 모든 설정 초기화
+             */
+            function resetAll() {
+                rowsInput.value = "5";
+                colsInput.value = "6";
+                studentList.value = "";
+                students = [];
+                pinnedSeats = {};
+                seatGrid.innerHTML = '<p class="text-gray-500 text-center col-span-full">설정에서 "교실 배치 생성" 버튼을 눌러주세요.</p>';
+                teacherViewToggle.checked = false;
+                seatingChartArea.classList.remove('teachers-view');
+            }
+
+            /**
+             * 선생님용 보기 (상하 반전) 토글
+             */
+            function toggleTeacherView() {
+                if (teacherViewToggle.checked) {
+                    seatingChartArea.classList.add('teachers-view');
+                } else {
+                    seatingChartArea.classList.remove('teachers-view');
+                }
+            }
+
+            /**
+             * 자리 배치도를 PDF로 다운로드
+             */
+            async function downloadAsPdf() {
+                if (typeof html2canvas === 'undefined' || typeof jsPDF === 'undefined') {
+                    // alert('PDF 생성 라이브러리를 불러오는 데 실패했습니다. 페이지를 새로고침 해주세요.');
+                    console.error('PDF 생성 라이브러리를 불러오는 데 실패했습니다.');
+                    return;
+                }
+
+                downloadPdfBtn.textContent = 'PDF 생성 중...';
+                downloadPdfBtn.disabled = true;
+
+                try {
+                    // 1. html2canvas로 배치도 영역을 캡처 (고해상도를 위해 scale 2 적용)
+                    const canvas = await html2canvas(seatingChartArea, { 
+                        scale: 2,
+                        backgroundColor: '#ffffff' // 캡처 영역 배경을 흰색으로 지정
+                    });
+                    
+                    // 2. 캡처한 이미지를 data URL로 변환
+                    const imgData = canvas.toDataURL('image/png');
+
+                    // 3. jsPDF로 A4 용지(세로) 생성
+                    const pdf = new jsPDF('p', 'mm', 'a4');
+                    
+                    const pdfWidth = pdf.internal.pageSize.getWidth();
+                    const pdfHeight = pdf.internal.pageSize.getHeight();
+                    
+                    // 4. 이미지의 비율을 유지하면서 A4 용지에 맞게 크기 계산
+                    const imgWidth = canvas.width;
+                    const imgHeight = canvas.height;
+                    const ratio = Math.min((pdfWidth - 20) / imgWidth, (pdfHeight - 20) / imgHeight); // 상하좌우 10mm 여백
+                    
+                    const finalImgWidth = imgWidth * ratio;
+                    const finalImgHeight = imgHeight * ratio;
+
+                    // 5. 이미지를 PDF 중앙에 배치
+                    const imgX = (pdfWidth - finalImgWidth) / 2;
+                    const imgY = 10; // 상단 여백 10mm
+
+                    pdf.addImage(imgData, 'PNG', imgX, imgY, finalImgWidth, finalImgHeight);
+                    
+                    // 6. PDF 저장
+                    pdf.save('seating_chart.pdf');
+
+                } catch (error) {
+                    console.error('PDF 생성 중 오류 발생:', error);
+                    // alert('PDF를 생성하는 중에 오류가 발생했습니다.');
+                } finally {
+                    // 7. 버튼 상태 복구
+                    downloadPdfBtn.textContent = '3. PDF로 다운로드';
+                    downloadPdfBtn.disabled = false;
+                }
+            }
+        });
+    </script>
+
+</body>
+</html>
